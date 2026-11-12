@@ -3,94 +3,71 @@ on:
   push:
     tags:
       - v*
+      - '!v*-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Prerelease version to publish (for example, 0.1.0-rc.1)'
+        required: true
+        type: string
+      tag:
+        description: npm dist-tag to publish under
+        required: true
+        default: rc
+        type: string
 permissions:
-  contents: read
+  id-token: write
+  contents: write
 jobs:
   prebuild:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            platform: linux
-            arch: x64
-            rust: x86_64-unknown-linux-gnu
-            container: ubuntu:22.04
-          - os: ubuntu-22.04-arm
-            platform: linux
-            arch: arm64
-            rust: aarch64-unknown-linux-gnu
-            container: ubuntu:22.04
-          - os: macos-26
-            platform: darwin
-            arch: arm64
-            rust: aarch64-apple-darwin
-          - os: macos-26
-            platform: darwin
-            arch: x64
-            rust: x86_64-apple-darwin
-          - os: macos-26
-            platform: ios
-            arch: arm64
-            rust: aarch64-apple-ios
-          - os: macos-26
-            platform: ios
-            arch: arm64
-            rust: aarch64-apple-ios-sim
-            tags: -simulator
-            flags: --simulator
-          - os: macos-26
-            platform: ios
-            arch: x64
-            rust: x86_64-apple-ios
-            tags: -simulator
-            flags: --simulator
-          - os: ubuntu-24.04
-            platform: android
-            arch: arm64
-            rust: aarch64-linux-android
-          - os: ubuntu-24.04
-            platform: android
-            arch: x64
-            rust: x86_64-linux-android
-          - os: windows-2022
-            platform: win32
-            arch: x64
-            rust: x86_64-pc-windows-msvc
-          - os: windows-2022
-            platform: win32
-            arch: arm64
-            rust: aarch64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
-    name: Build / ${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.tags }}
-    steps:
-      - run: |
-          apt update && apt install -y git curl ca-certificates
-          curl -fsSL -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc https://apt.llvm.org/llvm-snapshot.gpg.key
-          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" > /etc/apt/sources.list.d/llvm.list
-          apt update && apt install -y clang-21 lld-21 libc++-21-dev libc++abi-21-dev
-        if: ${{ matrix.platform == 'linux' }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust }}
-      - uses: holepunchto/actions/bare-base@v1
-      - uses: holepunchto/actions/compile-prebuilds@v1
-        with:
-          platform: ${{ matrix.platform }}
-          arch: ${{ matrix.arch }}
-          flags: ${{ matrix.flags }}
-          tags: ${{ matrix.tags }}
-          upload: true
+    uses: ./.github/workflows/prebuild.yml
+    with:
+      upload: true
   publish:
+    needs: prebuild
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: write
     environment:
       name: npm
-    needs: prebuild
     name: Publish
     steps:
       - uses: holepunchto/actions/node-base@v1
+      - name: Set prerelease version
+        if: github.event_name == 'workflow_dispatch'
+        id: prerelease
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-.+$ ]]; then
+            echo '::error::version must be a prerelease such as 0.1.0-rc.1'
+            exit 1
+          fi
+          if [[ "$NPM_TAG" == latest || ! "$NPM_TAG" =~ ^[a-z][a-z0-9._-]*$ ]]; then
+            echo '::error::tag must be a channel such as rc, next, beta, or alpha, and cannot be latest'
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --ignore-scripts --allow-same-version
+          echo "ref-name=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ inputs.version }}
+          NPM_TAG: ${{ inputs.tag }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.4'
+      - run: bun install --frozen-lockfile
       - uses: holepunchto/actions/download-prebuilds@v1
       - uses: holepunchto/actions/publish@v1
+        if: github.event_name == 'push'
+      - name: Publish prerelease to npm
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish --ignore-scripts --tag "$NPM_TAG"
+        env:
+          NPM_TAG: ${{ inputs.tag }}
+      - name: Create GitHub prerelease
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          npm pack --ignore-scripts --json > "$RUNNER_TEMP/pack.json"
+          package=$(node -p "require(process.env.RUNNER_TEMP + '/pack.json')[0].filename")
+          gh release create "$RELEASE_TAG" "$package" \
+            --target "$GITHUB_SHA" --title "$RELEASE_TAG" \
+            --prerelease --latest=false --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.prerelease.outputs.ref-name }}

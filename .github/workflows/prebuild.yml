@@ -1,6 +1,11 @@
 name: Prebuild
 on:
   pull_request:
+  workflow_call:
+    inputs:
+      upload:
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -72,9 +77,14 @@ jobs:
         with:
           targets: ${{ matrix.rust }}
       - uses: holepunchto/actions/bare-base@v1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.4'
+      - run: bun install --frozen-lockfile
       - uses: holepunchto/actions/compile-prebuilds@v1
         with:
           platform: ${{ matrix.platform }}
           arch: ${{ matrix.arch }}
           flags: ${{ matrix.flags }}
           tags: ${{ matrix.tags }}
+          upload: ${{ inputs.upload }}
