@@ -1,0 +1,61 @@
+name: Integrate
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Lint
+    steps:
+      - uses: holepunchto/actions/node-base@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: npm run lint
+      - run: cargo fmt --check
+      - run: cargo clippy --release -- -D warnings
+  test:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+            rust: x86_64-unknown-linux-gnu
+            container: ubuntu:22.04
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            rust: aarch64-unknown-linux-gnu
+            container: ubuntu:22.04
+          - os: macos-26
+            platform: darwin
+            arch: arm64
+            rust: aarch64-apple-darwin
+          - os: windows-2022
+            platform: win32
+            arch: x64
+            rust: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    name: Test / ${{ matrix.platform }}-${{ matrix.arch }}
+    steps:
+      - run: |
+          apt update && apt install -y git curl ca-certificates
+          curl -fsSL -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc https://apt.llvm.org/llvm-snapshot.gpg.key
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" > /etc/apt/sources.list.d/llvm.list
+          apt update && apt install -y clang-21 lld-21 libc++-21-dev libc++abi-21-dev
+        if: ${{ matrix.platform == 'linux' }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust }}
+      - uses: holepunchto/actions/bare-base@v1
+      - uses: holepunchto/actions/compile-prebuilds@v1
+        with:
+          platform: ${{ matrix.platform }}
+          arch: ${{ matrix.arch }}
+      - run: npm test
