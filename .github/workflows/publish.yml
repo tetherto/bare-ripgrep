@@ -1,0 +1,73 @@
+name: Publish
+on:
+  push:
+    tags:
+      - v*
+      - '!v*-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Prerelease version to publish (for example, 0.1.0-rc.1)'
+        required: true
+        type: string
+      tag:
+        description: npm dist-tag to publish under
+        required: true
+        default: rc
+        type: string
+permissions:
+  id-token: write
+  contents: write
+jobs:
+  prebuild:
+    uses: ./.github/workflows/prebuild.yml
+    with:
+      upload: true
+  publish:
+    needs: prebuild
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+    name: Publish
+    steps:
+      - uses: holepunchto/actions/node-base@v1
+      - name: Set prerelease version
+        if: github.event_name == 'workflow_dispatch'
+        id: prerelease
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-.+$ ]]; then
+            echo '::error::version must be a prerelease such as 0.1.0-rc.1'
+            exit 1
+          fi
+          if [[ "$NPM_TAG" == latest || ! "$NPM_TAG" =~ ^[a-z][a-z0-9._-]*$ ]]; then
+            echo '::error::tag must be a channel such as rc, next, beta, or alpha, and cannot be latest'
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --ignore-scripts --allow-same-version
+          echo "ref-name=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ inputs.version }}
+          NPM_TAG: ${{ inputs.tag }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.4'
+      - run: bun install --frozen-lockfile
+      - uses: holepunchto/actions/download-prebuilds@v1
+      - uses: holepunchto/actions/publish@v1
+        if: github.event_name == 'push'
+      - name: Publish prerelease to npm
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish --ignore-scripts --tag "$NPM_TAG"
+        env:
+          NPM_TAG: ${{ inputs.tag }}
+      - name: Create GitHub prerelease
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          npm pack --ignore-scripts --json > "$RUNNER_TEMP/pack.json"
+          package=$(node -p "require(process.env.RUNNER_TEMP + '/pack.json')[0].filename")
+          gh release create "$RELEASE_TAG" "$package" \
+            --target "$GITHUB_SHA" --title "$RELEASE_TAG" \
+            --prerelease --latest=false --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.prerelease.outputs.ref-name }}
