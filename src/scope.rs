@@ -51,7 +51,7 @@ impl Scope {
             root: req.root.clone(),
             folder,
             include_ignored: req.include_ignored,
-            deny: req.deny.iter().map(|path| path.to_lowercase()).collect(),
+            deny: req.deny.iter().map(|path| fold(path)).collect(),
             include,
             max_entries: req.max_entries,
             entries: AtomicU64::new(0),
@@ -103,12 +103,12 @@ impl Scope {
             return false;
         }
 
-        let path = path.to_string_lossy().to_lowercase();
+        let path = fold(&path.to_string_lossy());
         self.deny.iter().any(|root| {
             path == *root
                 || path
                     .strip_prefix(root.as_str())
-                    .is_some_and(|rest| rest.starts_with(MAIN_SEPARATOR))
+                    .is_some_and(|rest| rest.starts_with('/'))
         })
     }
 
@@ -158,4 +158,13 @@ pub fn threads() -> usize {
     std::thread::available_parallelism()
         .map_or(4, |n| n.get())
         .min(12)
+}
+
+fn fold(path: &str) -> String {
+    let path = path.to_lowercase();
+    if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path
+    }
 }
