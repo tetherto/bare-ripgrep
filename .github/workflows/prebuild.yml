@@ -68,7 +68,7 @@ jobs:
     name: Build / ${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.tags }}
     steps:
       - run: |
-          apt update && apt install -y git curl ca-certificates
+          apt update && apt install -y git curl ca-certificates unzip
           curl -fsSL -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc https://apt.llvm.org/llvm-snapshot.gpg.key
           echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" > /etc/apt/sources.list.d/llvm.list
           apt update && apt install -y clang-21 lld-21 libc++-21-dev libc++abi-21-dev
